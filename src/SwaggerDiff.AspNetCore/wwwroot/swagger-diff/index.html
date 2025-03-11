@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swagger Diff Viewer</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 24px;
+            gap: 16px;
+        }
+
+        .back-link {
+            color: #007bff;
+            text-decoration: none;
+            font-size: 14px;
+        }
+
+        .back-link:hover {
+            text-decoration: underline;
+        }
+
+        .title {
+            font-size: 24px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+
+        .controls {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 200px;
+        }
+
+        .label {
+            font-size: 14px;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .select {
+            padding: 10px 12px;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            background-color: white;
+            cursor: pointer;
+        }
+
+        .select:focus {
+            outline: none;
+            border-color: #007bff;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+        }
+
+        .error {
+            background-color: #fee2e2;
+            color: #dc2626;
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+        }
+
+        .loading {
+            color: #666;
+            font-style: italic;
+            padding: 20px 0;
+        }
+
+        .share-link {
+            margin-bottom: 16px;
+        }
+
+        .share-link button {
+            background-color: #6b7280;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .share-link button:hover {
+            background-color: #4b5563;
+        }
+
+        .diff-container {
+            background-color: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-x: auto;
+        }
+
+        /* HTTP Verb styling */
+        .httpVerb {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 2px 6px;
+            margin-right: 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            color: white;
+        }
+
+        .httpVerb.get { background-color: #22c55e; }
+        .httpVerb.post { background-color: #3b82f6; }
+        .httpVerb.put { background-color: #eab308; }
+        .httpVerb.delete { background-color: #ef4444; }
+        .httpVerb.patch { background-color: #a855f7; }
+
+        /* Toast notification */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: #10b981;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 0.3s, transform 0.3s;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .toast.error {
+            background-color: #ef4444;
+        }
+
+        /* Diff content styling */
+        .diff-container h2 {
+            font-size: 18px;
+            margin: 20px 0 10px;
+            color: #1a1a1a;
+        }
+
+        .diff-container h3 {
+            font-size: 16px;
+            margin: 16px 0 8px;
+            color: #374151;
+        }
+
+        .diff-container ul {
+            list-style-type: disc;
+            margin-left: 24px;
+            margin-bottom: 12px;
+        }
+
+        .diff-container li {
+            margin-bottom: 6px;
+        }
+
+        .diff-container code {
+            background-color: #f3f4f6;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header-row">
+            <a href="/swagger" class="back-link">&#128281; Back to Swagger</a>
+            <h2 class="title">Swagger Diff Viewer</h2>
+        </div>
+
+        <div class="controls">
+            <div class="control-group">
+                <label class="label">Old Version</label>
+                <select id="oldVersion" class="select">
+                    <option value="">-- Select Old Version --</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label class="label">New Version</label>
+                <select id="newVersion" class="select">
+                    <option value="">-- Select Newer Version --</option>
+                </select>
+            </div>
+
+            <div class="control-group">
+                <label class="label">View Mode</label>
+                <select id="mode" class="select">
+                    <option value="0">Diff</option>
+                    <option value="1">Changelog</option>
+                    <option value="2">Breaking Changes</option>
+                </select>
+            </div>
+        </div>
+
+        <div id="error" class="error" style="display: none;"></div>
+        <p id="loading" class="loading" style="display: none;">Loading comparison...</p>
+
+        <div id="shareContainer" class="share-link" style="display: none;">
+            <button onclick="copyLink()">&#128279; Share Result</button>
+        </div>
+
+        <div id="diffContainer" class="diff-container" style="display: none;"></div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script>
+        // State
+        let versions = [];
+        let oldVersionName = '';
+        let newVersionName = '';
+        let mode = 0;
+        let isLoading = false;
+
+        // DOM Elements
+        const oldVersionSelect = document.getElementById('oldVersion');
+        const newVersionSelect = document.getElementById('newVersion');
+        const modeSelect = document.getElementById('mode');
+        const errorDiv = document.getElementById('error');
+        const loadingP = document.getElementById('loading');
+        const shareContainer = document.getElementById('shareContainer');
+        const diffContainer = document.getElementById('diffContainer');
+        const toast = document.getElementById('toast');
+
+        // Toast notification
+        function showToast(message, isError = false) {
+            toast.textContent = message;
+            toast.className = 'toast' + (isError ? ' error' : '');
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        // Copy shareable link
+        function copyLink() {
+            const url = `${window.location.origin}/swagger-diff?old=${oldVersionName}&new=${newVersionName}&mode=${mode}`;
+            navigator.clipboard.writeText(url)
+                .then(() => showToast('Link copied to clipboard!'));
+        }
+
+        // Clean and enhance HTML output
+        function cleanHtml(html) {
+            return html
+                .replace(/<\/?(html|head|body)[^>]*>/gi, '')
+                .trim()
+                .replace(/\b(GET|POST|PUT|DELETE|PATCH)\b/g, (verb) =>
+                    `<span class="httpVerb ${verb.toLowerCase()}">${verb}</span>`
+                );
+        }
+
+        // Filter out non-JSON media type changes
+        function filterContent(html) {
+            const temp = document.createElement('div');
+            temp.innerHTML = cleanHtml(html);
+
+            // Remove non-JSON media type items
+            const items = temp.querySelectorAll('li');
+            items.forEach(li => {
+                if (li.textContent.includes('Modified media type:') &&
+                    !li.textContent.includes('application/json')) {
+                    li.remove();
+                }
+            });
+
+            // Deduplicate within endpoint-changes lists
+            const endpointLists = temp.querySelectorAll('ul.endpoint-changes');
+            endpointLists.forEach(ul => {
+                const seen = new Set();
+                const items = ul.querySelectorAll('li');
+                items.forEach(li => {
+                    const text = li.textContent.trim().toLowerCase();
+                    if (seen.has(text)) {
+                        li.remove();
+                    } else {
+                        seen.add(text);
+                    }
+                });
+            });
+
+            return temp.innerHTML;
+        }
+
+        // Populate version dropdowns
+        function populateVersions() {
+            const createOptions = (select, selected) => {
+                select.innerHTML = '<option value="">-- Select Version --</option>';
+                versions.forEach(v => {
+                    const opt = document.createElement('option');
+                    opt.value = v;
+                    opt.textContent = v;
+                    if (v === selected) opt.selected = true;
+                    select.appendChild(opt);
+                });
+            };
+            createOptions(oldVersionSelect, oldVersionName);
+            createOptions(newVersionSelect, newVersionName);
+        }
+
+        // Fetch versions from API
+        async function fetchVersions() {
+            try {
+                const res = await fetch('/api-docs/versions');
+                const json = await res.json();
+                if (!json.isSuccess) throw new Error(json.message || 'Unable to load versions');
+                versions = json.data;
+                populateVersions();
+            } catch (err) {
+                showToast('Failed to load versions', true);
+            }
+        }
+
+        // Fetch comparison
+        async function fetchComparison() {
+            if (!oldVersionName || !newVersionName) return;
+
+            isLoading = true;
+            loadingP.style.display = 'block';
+            errorDiv.style.display = 'none';
+            shareContainer.style.display = 'none';
+            diffContainer.style.display = 'none';
+
+            try {
+                const res = await fetch('/api-docs/compare', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        oldVersionName,
+                        newVersionName,
+                        comparisonType: parseInt(mode)
+                    })
+                });
+
+                const json = await res.json();
+                if (!json.isSuccess) throw new Error(json.message || 'Unable to load diff');
+
+                diffContainer.innerHTML = filterContent(json.data);
+                diffContainer.style.display = 'block';
+                shareContainer.style.display = 'block';
+                errorDiv.style.display = 'none';
+            } catch (err) {
+                errorDiv.textContent = err.message;
+                errorDiv.style.display = 'block';
+                diffContainer.style.display = 'none';
+                shareContainer.style.display = 'none';
+            } finally {
+                isLoading = false;
+                loadingP.style.display = 'none';
+            }
+        }
+
+        // Event handlers
+        oldVersionSelect.addEventListener('change', (e) => {
+            const value = e.target.value;
+            if (newVersionName && value >= newVersionName) {
+                showToast('Old version cannot be newer than the selected new version.', true);
+                e.target.value = oldVersionName;
+                return;
+            }
+            oldVersionName = value;
+            fetchComparison();
+        });
+
+        newVersionSelect.addEventListener('change', (e) => {
+            const value = e.target.value;
+            if (oldVersionName && value <= oldVersionName) {
+                showToast('New version cannot be older than the selected old version.', true);
+                e.target.value = newVersionName;
+                return;
+            }
+            newVersionName = value;
+            fetchComparison();
+        });
+
+        modeSelect.addEventListener('change', (e) => {
+            mode = parseInt(e.target.value);
+            fetchComparison();
+        });
+
+        // Parse URL params and initialize
+        function init() {
+            const params = new URLSearchParams(window.location.search);
+            const oldParam = params.get('old');
+            const newParam = params.get('new');
+            const modeParam = params.get('mode');
+
+            if (modeParam !== null) {
+                mode = parseInt(modeParam);
+                modeSelect.value = mode;
+            }
+
+            fetchVersions().then(() => {
+                if (oldParam && newParam) {
+                    oldVersionName = oldParam;
+                    newVersionName = newParam;
+                    populateVersions();
+                    fetchComparison();
+                }
+            });
+        }
+
+        init();
+    </script>
+</body>
+</html>
