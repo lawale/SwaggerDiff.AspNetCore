@@ -15,6 +15,7 @@ public static class ServiceCollectionExtensions
         else
             services.Configure<SwaggerDiffOptions>(_ => { });
 
+        services.AddSingleton<OasDiffDownloader>();
         services.AddTransient<IApiDiffClient, OasDiffClient>();
         services.AddTransient<SwaggerDiffService>();
 

@@ -7,21 +7,25 @@ namespace SwaggerDiff.AspNetCore.Services;
 public class OasDiffClient : IApiDiffClient
 {
     private readonly ILogger<OasDiffClient> _logger;
+    private readonly OasDiffDownloader _downloader;
 
-    public OasDiffClient(ILogger<OasDiffClient> logger)
+    public OasDiffClient(ILogger<OasDiffClient> logger, OasDiffDownloader downloader)
     {
         _logger = logger;
+        _downloader = downloader;
     }
 
     public async Task<string?> GetDiffAsync(string fileOnePath, string fileTwoPath, ApiComparisonType action)
     {
         try
         {
+            var oasDiffPath = await _downloader.GetOasDiffPathAsync();
+
             var process = new Process
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = "oasdiff",
+                    FileName = oasDiffPath,
                     Arguments = $"{action.ToString().ToLower()} {fileOnePath} {fileTwoPath} -f html",
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
