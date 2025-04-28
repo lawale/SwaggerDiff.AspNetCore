@@ -5,16 +5,31 @@
         <TargetFramework>net8.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+
+        <!-- Dotnet Tool Packaging -->
         <PackAsTool>true</PackAsTool>
         <ToolCommandName>swagger-diff</ToolCommandName>
+
+        <!-- NuGet Package Metadata -->
         <PackageId>SwaggerDiff.Tool</PackageId>
         <Version>1.0.0</Version>
-        <Description>CLI tool for generating and comparing OpenAPI snapshots</Description>
+        <Authors>OluwaVader</Authors>
+        <Description>CLI tool for generating OpenAPI snapshots from built assemblies without running the web server. Like dotnet-ef for your API surface.</Description>
+        <PackageTags>swagger;openapi;diff;cli;dotnet-tool;snapshot</PackageTags>
+        <PackageProjectUrl>https://github.com/OluwaVader/SwaggerDiff.AspNetCore</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/OluwaVader/SwaggerDiff.AspNetCore</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
     </PropertyGroup>
 
     <ItemGroup>
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
         <PackageReference Include="Swashbuckle.AspNetCore.Swagger" Version="6.5.0" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="../../README.md" Pack="true" PackagePath="/" />
     </ItemGroup>
 
 </Project>

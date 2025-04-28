@@ -4,16 +4,28 @@
         <TargetFramework>net8.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+
+        <!-- NuGet Package Metadata -->
         <PackageId>SwaggerDiff.AspNetCore</PackageId>
         <Version>1.0.0</Version>
-        <Description>In-app OpenAPI diff viewer for ASP.NET APIs</Description>
-        <PackageTags>swagger;openapi;diff;aspnetcore</PackageTags>
+        <Authors>OluwaVader</Authors>
+        <Description>In-app OpenAPI diff viewer for ASP.NET Core APIs. Embeds a diff viewer UI and wires up minimal API endpoints — no controllers required.</Description>
+        <PackageTags>swagger;openapi;diff;aspnetcore;api;oasdiff</PackageTags>
+        <PackageProjectUrl>https://github.com/OluwaVader/SwaggerDiff.AspNetCore</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/OluwaVader/SwaggerDiff.AspNetCore</RepositoryUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
     </PropertyGroup>
 
     <ItemGroup>
         <FrameworkReference Include="Microsoft.AspNetCore.App" />
         <EmbeddedResource Include="wwwroot\**\*" />
         <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="6.5.0" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="../../README.md" Pack="true" PackagePath="/" />
     </ItemGroup>
 
 </Project>

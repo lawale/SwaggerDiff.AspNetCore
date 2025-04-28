@@ -255,6 +255,55 @@ SwaggerDiff.AspNetCore/
           index.html                    # Standalone diff viewer UI
     SwaggerDiff.Tool/                 # CLI tool package
       Program.cs                        # snapshot + list commands
+  .github/
+    workflows/
+      ci.yml                            # Build + pack on push/PR
+      release.yml                       # Publish to NuGet.org
+```
+
+---
+
+## Publishing
+
+Both packages are published to [NuGet.org](https://www.nuget.org/) via GitHub Actions.
+
+### Setup
+
+Add a `NUGET_API_KEY` secret to your GitHub repository:
+
+1. Generate an API key at [nuget.org/account/apikeys](https://www.nuget.org/account/apikeys) with push permissions for `SwaggerDiff.AspNetCore` and `SwaggerDiff.Tool`
+2. Go to your repo **Settings > Secrets and variables > Actions**
+3. Add a new secret named `NUGET_API_KEY` with the key value
+
+### Release via tag push
+
+Tag a commit and push it — the release workflow builds, packs, publishes to NuGet.org, and creates a GitHub Release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The version number is derived from the tag (strips the `v` prefix). Both `SwaggerDiff.AspNetCore` and `SwaggerDiff.Tool` are published with the same version.
+
+### Release via manual dispatch
+
+For pre-release or testing builds, trigger the workflow manually from the **Actions** tab:
+
+1. Go to **Actions > Release > Run workflow**
+2. Enter a version string (e.g. `1.1.0-beta.1`)
+3. Click **Run workflow**
+
+### CI
+
+Every push to `main` and every pull request runs the CI workflow which builds, packs (to verify packaging works), and uploads the `.nupkg` files as artifacts.
+
+### Local packing
+
+To build packages locally:
+
+```bash
+dotnet pack --configuration Release --output ./artifacts
 ```
 
 ## License
