@@ -4,9 +4,9 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using SwaggerDiff.Tool;
 using Swashbuckle.AspNetCore.Swagger;
 
 var app = new CommandApp();
@@ -277,7 +277,7 @@ internal class CommandApp
                 builder.ConfigureServices((_, services) =>
                 {
                     // Replace server with a no-op to avoid binding ports
-                    services.AddSingleton<IServer, NoopServer>();
+                    services.AddSingleton<IServer, NoOpServer>();
 
                     // Remove all IHostedService except GenericWebHostService
                     for (var i = services.Count - 1; i >= 0; i--)
@@ -342,7 +342,7 @@ internal class CommandApp
                 .ConfigureWebHostDefaults(builder =>
                 {
                     builder.UseStartup(assemblyName!);
-                    builder.UseServer(new NoopServer());
+                    builder.UseServer(new NoOpServer());
                 })
                 .Build()
                 .Services;
@@ -394,21 +394,4 @@ internal class CommandApp
 
     private static string EscapePath(string path) =>
         path.Contains(' ') ? $"\"{path}\"" : path;
-}
-
-/// <summary>
-/// A no-op server implementation that doesn't bind any ports.
-/// Used when loading assemblies for swagger generation only.
-/// </summary>
-internal class NoopServer : IServer
-{
-    public IFeatureCollection Features { get; } = new FeatureCollection();
-
-    public Task StartAsync<TContext>(IHttpApplication<TContext> application, CancellationToken cancellationToken)
-        where TContext : notnull
-        => Task.CompletedTask;
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-    public void Dispose() { }
 }
