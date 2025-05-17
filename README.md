@@ -147,27 +147,41 @@ dotnet tool install -g SwaggerDiff.Tool
 
 #### `swagger-diff snapshot`
 
-Generate a new OpenAPI snapshot:
+Generate a new OpenAPI snapshot. The simplest usage — run from your project directory:
 
 ```bash
-swagger-diff snapshot \
-  --assembly ./bin/Release/net8.0/MyApi.dll \
-  --output Docs/Versions \
-  --doc-name v1
+# Auto-discovers the .csproj, builds it, and generates a snapshot
+swagger-diff snapshot
 ```
 
-| Option | Required | Default | Description |
-|--------|----------|---------|-------------|
-| `--assembly` | Yes | — | Path to the built API assembly DLL |
-| `--output` | No | `Docs/Versions` | Directory where snapshots are written |
-| `--doc-name` | No | `v1` | Swagger document name passed to `ISwaggerProvider.GetSwagger()` |
+With explicit project and configuration:
+
+```bash
+swagger-diff snapshot --project ./src/MyApi/MyApi.csproj -c Release --output Docs/Versions
+```
+
+Or point directly at a pre-built assembly:
+
+```bash
+swagger-diff snapshot --assembly ./bin/Release/net8.0/MyApi.dll
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--project` | auto-discover | Path to a `.csproj` file. If omitted, finds the single `.csproj` in the current directory |
+| `--assembly` | — | Direct path to a built DLL. Overrides `--project` and skips the build step |
+| `-c`, `--configuration` | `Debug` | Build configuration (used with `--project`) |
+| `--no-build` | `false` | Skip the build step (assumes the project was already built) |
+| `--output` | `Docs/Versions` | Directory where snapshots are written |
+| `--doc-name` | `v1` | Swagger document name passed to `ISwaggerProvider.GetSwagger()` |
 
 The command will:
 
-1. Load the assembly and build the host using the same `HostFactoryResolver` pattern that `dotnet ef` and the Swashbuckle CLI use — your `Program.cs` entry point runs, but a `NoopServer` replaces Kestrel so no ports are bound and hosted services are stripped out.
-2. Resolve `ISwaggerProvider` from the DI container and serialize the OpenAPI document.
-3. Compare with the latest existing snapshot (normalizing away the `info.version` field).
-4. If the API surface has changed, write a new timestamped file (e.g. `doc_20250612143022.json`). If nothing changed, print "No API changes detected" and exit cleanly.
+1. **Build the project** (unless `--no-build` or `--assembly` is used), then resolve the output DLL via MSBuild.
+2. **Load the assembly** and build the host using the same `HostFactoryResolver` pattern that `dotnet ef` and the Swashbuckle CLI use — your `Program.cs` entry point runs, but a `NoOpServer` replaces Kestrel so no ports are bound and hosted services are stripped out.
+3. **Resolve `ISwaggerProvider`** from the DI container and serialize the OpenAPI document.
+4. **Compare** with the latest existing snapshot (normalizing away the `info.version` field).
+5. If the API surface has changed, **write a new timestamped file** (e.g. `doc_20250612143022.json`). If nothing changed, print "No API changes detected" and exit cleanly.
 
 #### `swagger-diff list`
 
@@ -177,19 +191,17 @@ List available snapshots:
 swagger-diff list --dir Docs/Versions
 ```
 
-| Option | Required | Default | Description |
-|--------|----------|---------|-------------|
-| `--dir` | No | `Docs/Versions` | Directory to scan for snapshot files |
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--dir` | `Docs/Versions` | Directory to scan for snapshot files |
 
 ### How assembly loading works
 
 The CLI uses a **two-stage subprocess** pattern (identical to how the Swashbuckle CLI works):
 
-1. **Stage 1** (`snapshot`): Locates the target assembly's `.deps.json` and `.runtimeconfig.json`, then re-invokes itself via `dotnet exec --depsfile <app>.deps.json --runtimeconfig <app>.runtimeconfig.json <tool>.dll _snapshot ...`. This ensures the tool runs inside the target app's dependency graph.
+1. **Stage 1** (`snapshot`): Builds the project (if needed), resolves the output DLL via `dotnet msbuild --getProperty:TargetPath`, then re-invokes itself via `dotnet exec --depsfile <app>.deps.json --runtimeconfig <app>.runtimeconfig.json <tool>.dll _snapshot ...`. This ensures the tool runs inside the target app's dependency graph.
 
-2. **Stage 2** (`_snapshot`): Now running with the correct dependencies, it loads the assembly via `AssemblyLoadContext`, resolves `HostFactoryResolver` via reflection, builds the host with `NoopServer` injected, and extracts the swagger document.
-
-This means you must point `--assembly` at a **published or built** output directory that contains both the `.dll` and its companion `.deps.json` / `.runtimeconfig.json` files.
+2. **Stage 2** (`_snapshot`): Now running with the correct dependencies, it loads the assembly via `AssemblyLoadContext`, resolves `HostFactoryResolver` via reflection, builds the host with `NoOpServer` injected, and extracts the swagger document.
 
 ---
 
@@ -215,11 +227,8 @@ app.Run();
 ```
 
 ```bash
-# Build the project
-dotnet build
-
-# Generate a snapshot
-swagger-diff snapshot --assembly ./bin/Debug/net8.0/MyApi.dll --output ./Docs/Versions
+# Generate a snapshot (builds the project automatically)
+swagger-diff snapshot --output ./Docs/Versions
 
 # Copy snapshots to build output so the UI can find them
 cp -r Docs/ bin/Debug/net8.0/Docs/

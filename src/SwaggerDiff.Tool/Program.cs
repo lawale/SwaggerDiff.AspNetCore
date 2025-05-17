@@ -9,9 +9,10 @@ app.Configure(config =>
 
     config.AddCommand<SnapshotCommand>("snapshot")
         .WithDescription("Generate a new OpenAPI snapshot from a built assembly.")
-        .WithExample("snapshot", "--assembly", "./bin/Release/net8.0/MyApi.dll")
-        .WithExample("snapshot", "--assembly", "./bin/Release/net8.0/MyApi.dll", "--output", "Docs/Versions")
-        .WithExample("snapshot", "--assembly", "./bin/Release/net8.0/MyApi.dll", "--doc-name", "v1");
+        .WithExample("snapshot")
+        .WithExample("snapshot", "--project", "./src/MyApi/MyApi.csproj")
+        .WithExample("snapshot", "-c", "Release", "--output", "Docs/Versions")
+        .WithExample("snapshot", "--assembly", "./bin/Release/net8.0/MyApi.dll");
 
     config.AddCommand<ListCommand>("list")
         .WithDescription("List available OpenAPI snapshots in a directory.")
