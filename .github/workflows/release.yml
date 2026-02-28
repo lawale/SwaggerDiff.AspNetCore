@@ -73,10 +73,16 @@ jobs:
           dotnet nuget push "./artifacts/*.nupkg"
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
+          
+      - name: Create tag if not exists
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git tag "v${{ env.VERSION }}" || true
+          git push origin "v${{ env.VERSION }}" || true
 
       - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: "v${{ env.VERSION }}"
           generate_release_notes: true
           files: ./artifacts/*.nupkg
