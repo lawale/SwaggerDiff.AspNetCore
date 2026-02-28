@@ -305,7 +305,7 @@ For pre-release or testing builds, trigger the workflow manually from the **Acti
 
 ### CI
 
-Every push to `main` and every pull request runs the CI workflow which builds, packs (to verify packaging works), and uploads the `.nupkg` files as artifacts.
+Every push to `master` and every pull request runs the CI workflow which builds, packs (to verify packaging works), and uploads the `.nupkg` files as artifacts.
 
 ### Local packing
 
