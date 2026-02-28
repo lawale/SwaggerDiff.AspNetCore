@@ -17,7 +17,7 @@ jobs:
     
     permissions: 
       id-token: write
-      contents: read
+      contents: write
 
     env:
       # For tag pushes: strip the 'v' prefix (v1.0.0 -> 1.0.0)
@@ -64,6 +64,7 @@ jobs:
           --output ./artifacts
           
       - name: Nuget Login (OIDC)
+        id: login
         uses: NuGet/login@v1
         with:
           user: OluwaVader
@@ -73,6 +74,7 @@ jobs:
           dotnet nuget push "./artifacts/*.nupkg"
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
+          --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
           
       - name: Create tag if not exists
         if: github.event_name == 'workflow_dispatch'
