@@ -8,7 +8,7 @@
 
         <!-- Dotnet Tool Packaging -->
         <PackAsTool>true</PackAsTool>
-        <ToolCommandName>swagger-diff</ToolCommandName>
+        <ToolCommandName>swaggerdiff</ToolCommandName>
 
         <!-- NuGet Package Metadata -->
         <PackageId>SwaggerDiff.Tool</PackageId>

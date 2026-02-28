@@ -239,39 +239,6 @@ dotnet run
 
 ---
 
-## Project structure
-
-```
-SwaggerDiff.AspNetCore/
-  SwaggerDiff.AspNetCore.sln
-  src/
-    SwaggerDiff.AspNetCore/           # Library package
-      Extensions/
-        ServiceCollectionExtensions.cs  # AddSwaggerDiff()
-        SwaggerDiffExtensions.cs        # AddSwaggerDiffButton(), UseSwaggerDiff()
-      Models/
-        ApiComparisonType.cs            # Diff, ChangeLog, Breaking
-        ApiDiffRequest.cs
-      Services/
-        IApiDiffClient.cs
-        OasDiffClient.cs                # Shells out to oasdiff
-        OasDiffDownloader.cs            # Auto-downloads oasdiff on first use
-        SwaggerDiffService.cs           # Lists versions, orchestrates diffs
-      SwaggerDiffOptions.cs
-      wwwroot/
-        swagger-diff-tool.html          # Injected button for Swagger UI
-        swagger-diff/
-          index.html                    # Standalone diff viewer UI
-    SwaggerDiff.Tool/                 # CLI tool package
-      Program.cs                        # snapshot + list commands
-  .github/
-    workflows/
-      ci.yml                            # Build + pack on push/PR
-      release.yml                       # Publish to NuGet.org
-```
-
----
-
 ## Publishing
 
 Both packages are published to [NuGet.org](https://www.nuget.org/) via GitHub Actions.

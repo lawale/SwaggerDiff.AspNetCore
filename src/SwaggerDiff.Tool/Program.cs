@@ -5,7 +5,7 @@ var app = new CommandApp();
 
 app.Configure(config =>
 {
-    config.SetApplicationName("swagger-diff");
+    config.SetApplicationName("swaggerdiff");
 
     config.AddCommand<SnapshotCommand>("snapshot")
         .WithDescription("Generate a new OpenAPI snapshot from a built assembly.")
