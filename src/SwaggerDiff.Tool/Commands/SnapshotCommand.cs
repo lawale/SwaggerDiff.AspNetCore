@@ -88,20 +88,46 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
             return 1;
         }
 
-        // 2. Re-invoke as: dotnet exec --depsfile ... --runtimeconfig ... <tool>.dll _snapshot ...
+        // 2. Re-invoke as: dotnet exec --depsfile ... --additional-deps ... --runtimeconfig ... <tool>.dll _snapshot ...
+        //    We pass --additional-deps so the runtime knows about the tool's own dependencies
+        //    (e.g. Spectre.Console.Cli) which aren't in the target app's deps.json.
+        //    We pass --additionalprobingpath so the runtime can locate those assemblies
+        //    in the NuGet global packages cache.
         var toolDll = typeof(SnapshotCommand).Assembly.Location;
+        var toolDir = Path.GetDirectoryName(toolDll)!;
+        var toolDepsFile = Path.Combine(toolDir,
+            Path.GetFileNameWithoutExtension(toolDll) + ".deps.json");
 
-        var processArgs = string.Join(" ",
-        [
+        var nugetPackages = Environment.GetEnvironmentVariable("NUGET_PACKAGES")
+            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
+
+        var args = new List<string>
+        {
             "exec",
             "--depsfile", EscapePath(depsFile),
-            "--runtimeconfig", EscapePath(runtimeConfig),
+            "--runtimeconfig", EscapePath(runtimeConfig)
+        };
+
+        // Merge the tool's dependency graph so Spectre.Console.Cli etc. can be resolved
+        if (File.Exists(toolDepsFile))
+        {
+            args.AddRange(["--additional-deps", EscapePath(toolDepsFile)]);
+        }
+
+        // Tell the runtime where to find both tool and NuGet-cached assemblies
+        args.AddRange(["--additionalprobingpath", EscapePath(nugetPackages)]);
+        args.AddRange(["--additionalprobingpath", EscapePath(toolDir)]);
+
+        args.AddRange(
+        [
             EscapePath(toolDll),
             "_snapshot",
             "--assembly", EscapePath(assemblyPath),
             "--output", EscapePath(outputDir),
             "--doc-name", settings.DocName
         ]);
+
+        var processArgs = string.Join(" ", args);
 
         var process = new Process
         {
@@ -115,6 +141,11 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
                 WorkingDirectory = assemblyDir
             }
         };
+
+        // Signal to the target app that it's being loaded for snapshot generation.
+        // The SwaggerDiff.AspNetCore library exposes SwaggerDiffEnv.IsDryRun so users
+        // can skip expensive startup code (Vault, DB, message brokers, etc.).
+        process.StartInfo.Environment["SWAGGERDIFF_DRYRUN"] = "true";
 
         process.Start();
 
