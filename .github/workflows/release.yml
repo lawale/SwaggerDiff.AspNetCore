@@ -14,6 +14,10 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
+    
+    permissions: 
+      id-token: write
+      contents: read
 
     env:
       # For tag pushes: strip the 'v' prefix (v1.0.0 -> 1.0.0)
@@ -58,11 +62,15 @@ jobs:
           --configuration Release
           /p:Version=${{ env.VERSION }}
           --output ./artifacts
+          
+      - name: Nuget Login (OIDC)
+        uses: NuGet/login@v1
+        with:
+          user: OluwaVader
 
       - name: Push to NuGet.org
         run: >
           dotnet nuget push "./artifacts/*.nupkg"
-          --api-key ${{ secrets.NUGET_API_KEY }}
           --source https://api.nuget.org/v3/index.json
           --skip-duplicate
 
