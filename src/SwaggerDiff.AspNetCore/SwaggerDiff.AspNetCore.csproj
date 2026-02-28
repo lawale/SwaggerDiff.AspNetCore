@@ -10,7 +10,7 @@
         <Version>1.0.0</Version>
         <Authors>OluwaVader</Authors>
         <Description>In-app OpenAPI diff viewer for ASP.NET Core APIs. Embeds a diff viewer UI and wires up minimal API endpoints — no controllers required.</Description>
-        <PackageTags>swagger;openapi;diff;aspnetcore;api;oasdiff</PackageTags>
+        <PackageTags>swagger;openapi;diff;aspnetcore;api;oasdiff;api-versioning;openapi-diff</PackageTags>
         <PackageProjectUrl>https://github.com/OluwaVader/SwaggerDiff.AspNetCore</PackageProjectUrl>
         <RepositoryUrl>https://github.com/OluwaVader/SwaggerDiff.AspNetCore</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
