@@ -7,20 +7,28 @@ namespace SwaggerDiff.Tool.Commands;
 
 /// <summary>
 /// Stage 1: User-facing snapshot command.
-/// Resolves the target assembly (from --project, --assembly, or auto-discovery),
-/// optionally builds it, then re-invokes itself via <c>dotnet exec</c> with the target app's
+/// Resolves target assemblies (from --project, --assembly, or auto-discovery of ASP.NET Core web projects),
+/// optionally builds them, then re-invokes itself via <c>dotnet exec</c> with each target app's
 /// deps.json and runtimeconfig.json so that all assembly dependencies resolve correctly.
 /// </summary>
 internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
 {
+    /// <summary>
+    /// Well-known directories that are always skipped during auto-discovery.
+    /// </summary>
+    private static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "bin", "obj", ".git", ".idea", ".vs", "node_modules", "TestResults", "artifacts"
+    };
+
     public sealed class Settings : CommandSettings
     {
         [CommandOption("--project <PATH>")]
-        [Description("Path to the .csproj file. Defaults to the single .csproj in the current directory.")]
-        public string? Project { get; set; }
+        [Description("Path to one or more .csproj files. Repeat for multiple projects.")]
+        public string[]? Project { get; set; }
 
         [CommandOption("--assembly <PATH>")]
-        [Description("Direct path to a built assembly DLL. Overrides --project (skips build).")]
+        [Description("Direct path to a built assembly DLL. Overrides --project (skips build). Single project only.")]
         public string? Assembly { get; set; }
 
         [CommandOption("-c|--configuration <CONFIG>")]
@@ -34,7 +42,7 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         public bool NoBuild { get; set; }
 
         [CommandOption("--output <DIR>")]
-        [Description("Output directory for snapshots.")]
+        [Description("Output directory for snapshots (relative to each project directory).")]
         [DefaultValue("Docs/Versions")]
         public string Output { get; set; } = "Docs/Versions";
 
@@ -42,6 +50,14 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         [Description("Swagger document name.")]
         [DefaultValue("v1")]
         public string DocName { get; set; } = "v1";
+
+        [CommandOption("--exclude <NAME>")]
+        [Description("Project names to exclude from auto-discovery (without .csproj extension). Repeat for multiple.")]
+        public string[]? Exclude { get; set; }
+
+        [CommandOption("--exclude-dir <DIR>")]
+        [Description("Directory names to exclude from auto-discovery. Repeat for multiple.")]
+        public string[]? ExcludeDir { get; set; }
 
         public override ValidationResult Validate()
         {
@@ -52,11 +68,14 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
                     return ValidationResult.Error($"Assembly not found: {fullPath}");
             }
 
-            if (!string.IsNullOrWhiteSpace(Project))
+            if (Project != null)
             {
-                var fullPath = Path.GetFullPath(Project);
-                if (!File.Exists(fullPath))
-                    return ValidationResult.Error($"Project file not found: {fullPath}");
+                foreach (var project in Project)
+                {
+                    var fullPath = Path.GetFullPath(project);
+                    if (!File.Exists(fullPath))
+                        return ValidationResult.Error($"Project file not found: {fullPath}");
+                }
             }
 
             return ValidationResult.Success();
@@ -65,13 +84,220 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
 
     public override int Execute(CommandContext context, Settings settings, CancellationToken cancellationToken)
     {
-        // 1. Resolve the assembly path
-        var assemblyPath = ResolveAssemblyPath(settings);
-        if (assemblyPath == null)
+        // Single assembly mode — unchanged behavior
+        if (!string.IsNullOrWhiteSpace(settings.Assembly))
+        {
+            AnsiConsole.MarkupLine($"[grey]Using assembly:[/] {settings.Assembly}");
+            var assemblyPath = Path.GetFullPath(settings.Assembly);
+            var assemblyDir = Path.GetDirectoryName(assemblyPath)!;
+            var outputDir = Path.GetFullPath(settings.Output);
+            return RunSnapshotSubprocess(assemblyPath, assemblyDir, outputDir, settings.DocName);
+        }
+
+        // Resolve one or more projects
+        var projects = ResolveProjects(settings);
+        if (projects == null || projects.Count == 0)
             return 1;
 
-        var outputDir = Path.GetFullPath(settings.Output);
-        var assemblyDir = Path.GetDirectoryName(assemblyPath)!;
+        var succeeded = 0;
+        var failed = 0;
+
+        foreach (var projectPath in projects)
+        {
+            var projectName = Path.GetFileNameWithoutExtension(projectPath);
+            var projectDir = Path.GetDirectoryName(projectPath)!;
+
+            if (projects.Count > 1)
+                AnsiConsole.MarkupLine($"\n[bold]── {projectName.EscapeMarkup()} ──[/]");
+
+            // Build and resolve the assembly DLL
+            var assemblyPath = BuildAndResolveAssembly(projectPath, settings);
+            if (assemblyPath == null)
+            {
+                failed++;
+                continue;
+            }
+
+            // Output directory is relative to the project's directory
+            var outputDir = Path.Combine(projectDir, settings.Output);
+            var assemblyDir = Path.GetDirectoryName(assemblyPath)!;
+
+            var exitCode = RunSnapshotSubprocess(assemblyPath, assemblyDir, outputDir, settings.DocName);
+            if (exitCode == 0)
+                succeeded++;
+            else
+                failed++;
+        }
+
+        // Print summary for multi-project runs
+        if (projects.Count > 1)
+        {
+            AnsiConsole.WriteLine();
+            if (failed == 0)
+                AnsiConsole.MarkupLine($"[green]Snapshots complete:[/] {succeeded}/{projects.Count} succeeded");
+            else
+                AnsiConsole.MarkupLine($"[yellow]Snapshots complete:[/] {succeeded}/{projects.Count} succeeded, {failed} failed");
+        }
+
+        return failed > 0 ? 1 : 0;
+    }
+    
+    /// <summary>
+    /// Resolves the list of projects to process from explicit flags or auto-discovery.
+    /// </summary>
+    private static List<string>? ResolveProjects(Settings settings)
+    {
+        // Explicit --project flags
+        if (settings.Project is { Length: > 0 })
+        {
+            var resolved = settings.Project.Select(Path.GetFullPath).ToList();
+            AnsiConsole.MarkupLine($"[grey]Using {resolved.Count} specified project(s)[/]");
+            return resolved;
+        }
+
+        // Auto-discovery: single .csproj in CWD → current behavior
+        var cwd = Directory.GetCurrentDirectory();
+        var localProjects = Directory.GetFiles(cwd, "*.csproj");
+
+        if (localProjects.Length == 1)
+        {
+            AnsiConsole.MarkupLine($"[grey]Using project:[/] {localProjects[0]}");
+            return [localProjects[0]];
+        }
+
+        // Auto-discovery: scan up to 2 levels deep for ASP.NET Core web projects
+        var discovered = DiscoverWebProjects(cwd, settings.Exclude, settings.ExcludeDir);
+
+        if (discovered.Count == 0)
+        {
+            AnsiConsole.MarkupLine("[red]Error:[/] No ASP.NET Core web projects found.");
+            AnsiConsole.MarkupLine("[grey]Searched for projects with Sdk=\"Microsoft.NET.Sdk.Web\" up to 2 levels deep.[/]");
+            AnsiConsole.MarkupLine("[grey]Use --project to specify project paths explicitly.[/]");
+            return null;
+        }
+
+        AnsiConsole.MarkupLine($"[grey]Discovered {discovered.Count} web project(s):[/]");
+        foreach (var p in discovered)
+            AnsiConsole.MarkupLine($"[grey]  {Path.GetRelativePath(cwd, p)}[/]");
+
+        return discovered;
+    }
+
+    /// <summary>
+    /// Scans the current directory and up to 2 levels of subdirectories for ASP.NET Core web projects.
+    /// Filters by <c>Sdk="Microsoft.NET.Sdk.Web"</c> and applies exclude rules.
+    /// </summary>
+    private static List<string> DiscoverWebProjects(string rootDir, string[]? excludeNames, string[]? excludeDirs)
+    {
+        var results = new List<string>();
+        var excludeNameSet = new HashSet<string>(excludeNames ?? [], StringComparer.OrdinalIgnoreCase);
+        var excludeDirSet = new HashSet<string>(excludeDirs ?? [], StringComparer.OrdinalIgnoreCase);
+
+        SearchDirectory(rootDir, 0);
+        results.Sort(StringComparer.OrdinalIgnoreCase);
+        return results;
+
+        void SearchDirectory(string dir, int depth)
+        {
+            if (depth > 2) return;
+
+            // Skip well-known non-project directories
+            var dirName = Path.GetFileName(dir);
+            if (depth > 0 && SkippedDirectories.Contains(dirName))
+                return;
+
+            // Skip user-excluded directories
+            if (depth > 0 && excludeDirSet.Contains(dirName))
+                return;
+
+            // Check .csproj files in this directory
+            foreach (var csproj in Directory.GetFiles(dir, "*.csproj"))
+            {
+                var projectName = Path.GetFileNameWithoutExtension(csproj);
+
+                // Skip excluded project names
+                if (excludeNameSet.Contains(projectName))
+                    continue;
+
+                // Check if it's a web project
+                if (IsWebProject(csproj))
+                    results.Add(csproj);
+            }
+
+            // Recurse into subdirectories
+            try
+            {
+                foreach (var subDir in Directory.GetDirectories(dir))
+                    SearchDirectory(subDir, depth + 1);
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Skip directories we can't read
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks whether a .csproj file uses the ASP.NET Core Web SDK.
+    /// </summary>
+    private static bool IsWebProject(string csprojPath)
+    {
+        try
+        {
+            // Read just the first few lines — the Sdk attribute is always on line 1
+            using var reader = new StreamReader(csprojPath);
+            for (var i = 0; i < 3 && reader.ReadLine() is { } line; i++)
+            {
+                if (line.Contains("Microsoft.NET.Sdk.Web", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Builds a project (unless --no-build) and resolves its output assembly DLL path.
+    /// </summary>
+    private static string? BuildAndResolveAssembly(string projectPath, Settings settings)
+    {
+        AnsiConsole.MarkupLine($"[grey]Using project:[/] {projectPath}");
+
+        if (!settings.NoBuild)
+        {
+            AnsiConsole.MarkupLine($"[grey]Building[/] ({settings.Configuration})...");
+            var buildResult = RunProcess("dotnet",
+                $"build {EscapePath(projectPath)} --configuration {settings.Configuration} --nologo -v q");
+            if (buildResult != 0)
+            {
+                AnsiConsole.MarkupLine("[red]Error:[/] Build failed.");
+                return null;
+            }
+        }
+
+        var targetPath = GetMsBuildProperty(projectPath, "TargetPath", settings.Configuration);
+        if (string.IsNullOrWhiteSpace(targetPath) || !File.Exists(targetPath))
+        {
+            AnsiConsole.MarkupLine("[red]Error:[/] Could not resolve assembly path from project. Try using --assembly directly.");
+            return null;
+        }
+
+        return targetPath;
+    }
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Subprocess execution (Stage 2)
+    // ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Launches the Stage 2 subprocess via <c>dotnet exec</c> with the target app's dependency context.
+    /// </summary>
+    private static int RunSnapshotSubprocess(string assemblyPath, string assemblyDir, string outputDir, string docName)
+    {
         var assemblyName = Path.GetFileNameWithoutExtension(assemblyPath);
         var depsFile = Path.Combine(assemblyDir, $"{assemblyName}.deps.json");
         var runtimeConfig = Path.Combine(assemblyDir, $"{assemblyName}.runtimeconfig.json");
@@ -88,11 +314,7 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
             return 1;
         }
 
-        // 2. Re-invoke as: dotnet exec --depsfile ... --additional-deps ... --runtimeconfig ... <tool>.dll _snapshot ...
-        //    We pass --additional-deps so the runtime knows about the tool's own dependencies
-        //    (e.g. Spectre.Console.Cli) which aren't in the target app's deps.json.
-        //    We pass --additionalprobingpath so the runtime can locate those assemblies
-        //    in the NuGet global packages cache.
+        // Resolve tool paths for --additional-deps and --additionalprobingpath
         var toolDll = typeof(SnapshotCommand).Assembly.Location;
         var toolDir = Path.GetDirectoryName(toolDll)!;
         var toolDepsFile = Path.Combine(toolDir,
@@ -108,13 +330,9 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
             "--runtimeconfig", EscapePath(runtimeConfig)
         };
 
-        // Merge the tool's dependency graph so Spectre.Console.Cli etc. can be resolved
         if (File.Exists(toolDepsFile))
-        {
             args.AddRange(["--additional-deps", EscapePath(toolDepsFile)]);
-        }
 
-        // Tell the runtime where to find both tool and NuGet-cached assemblies
         args.AddRange(["--additionalprobingpath", EscapePath(nugetPackages)]);
         args.AddRange(["--additionalprobingpath", EscapePath(toolDir)]);
 
@@ -123,8 +341,8 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
             EscapePath(toolDll),
             "_snapshot",
             "--assembly", EscapePath(assemblyPath),
-            "--output", EscapePath(outputDir),
-            "--doc-name", settings.DocName
+            "--output", EscapePath(Path.GetFullPath(outputDir)),
+            "--doc-name", docName
         ]);
 
         var processArgs = string.Join(" ", args);
@@ -143,8 +361,6 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         };
 
         // Signal to the target app that it's being loaded for snapshot generation.
-        // The SwaggerDiff.AspNetCore library exposes SwaggerDiffEnv.IsDryRun so users
-        // can skip expensive startup code (Vault, DB, message brokers, etc.).
         process.StartInfo.Environment["SWAGGERDIFF_DRYRUN"] = "true";
 
         process.Start();
@@ -162,73 +378,10 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         return process.ExitCode;
     }
 
-    /// <summary>
-    /// Resolves the assembly DLL path from --assembly, --project, or auto-discovery.
-    /// Builds the project first unless --no-build or --assembly is specified.
-    /// </summary>
-    private static string? ResolveAssemblyPath(Settings settings)
-    {
-        // Direct assembly path — skip everything
-        if (!string.IsNullOrWhiteSpace(settings.Assembly))
-        {
-            AnsiConsole.MarkupLine($"[grey]Using assembly:[/] {settings.Assembly}");
-            return Path.GetFullPath(settings.Assembly);
-        }
+    // ─────────────────────────────────────────────────────────────────
+    //  Utilities
+    // ─────────────────────────────────────────────────────────────────
 
-        // Resolve the .csproj path
-        var projectPath = ResolveProjectPath(settings.Project);
-        if (projectPath == null)
-            return null;
-
-        AnsiConsole.MarkupLine($"[grey]Using project:[/] {projectPath}");
-
-        // Build unless --no-build
-        if (!settings.NoBuild)
-        {
-            AnsiConsole.MarkupLine($"[grey]Building[/] ({settings.Configuration})...");
-            var buildResult = RunProcess("dotnet", $"build {EscapePath(projectPath)} --configuration {settings.Configuration} --nologo -v q");
-            if (buildResult != 0)
-            {
-                AnsiConsole.MarkupLine("[red]Error:[/] Build failed.");
-                return null;
-            }
-        }
-
-        // Resolve the output DLL path via MSBuild
-        var targetPath = GetMsBuildProperty(projectPath, "TargetPath", settings.Configuration);
-        if (string.IsNullOrWhiteSpace(targetPath) || !File.Exists(targetPath))
-        {
-            AnsiConsole.MarkupLine("[red]Error:[/] Could not resolve assembly path from project. Try using --assembly directly.");
-            return null;
-        }
-
-        return targetPath;
-    }
-
-    /// <summary>
-    /// Resolves the .csproj file path from an explicit --project value or auto-discovers
-    /// the single .csproj in the current directory.
-    /// </summary>
-    private static string? ResolveProjectPath(string? explicitProject)
-    {
-        if (!string.IsNullOrWhiteSpace(explicitProject))
-            return Path.GetFullPath(explicitProject);
-
-        // Auto-discover: find .csproj files in the current directory
-        var csprojFiles = Directory.GetFiles(Directory.GetCurrentDirectory(), "*.csproj");
-
-        return csprojFiles.Length switch
-        {
-            0 => Error("No .csproj file found in the current directory. Use --project or --assembly."),
-            1 => csprojFiles[0],
-            _ => Error($"Multiple .csproj files found. Use --project to specify which one:\n"
-                       + string.Join("\n", csprojFiles.Select(f => $"  {Path.GetFileName(f)}")))
-        };
-    }
-
-    /// <summary>
-    /// Reads an MSBuild property from a project file using <c>dotnet msbuild --getProperty</c>.
-    /// </summary>
     private static string? GetMsBuildProperty(string projectPath, string property, string configuration)
     {
         var process = new Process
@@ -278,12 +431,6 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
             Console.Error.Write(stderr);
 
         return process.ExitCode;
-    }
-
-    private static string? Error(string message)
-    {
-        AnsiConsole.MarkupLine($"[red]Error:[/] {message.EscapeMarkup()}");
-        return null;
     }
 
     private static string EscapePath(string path) =>
