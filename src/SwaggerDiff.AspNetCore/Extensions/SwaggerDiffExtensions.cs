@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,7 +47,7 @@ public static class SwaggerDiffExtensions
         {
             var versions = service.GetAvailableVersions();
             return Results.Ok(new { isSuccess = true, data = versions });
-        }).ExcludeFromDescription();
+        }).ExcludeFromDescription().AllowAnonymous();
 
         app.MapPost("/api-docs/compare", async (ApiDiffRequest request, SwaggerDiffService service) =>
         {
@@ -55,7 +56,7 @@ public static class SwaggerDiffExtensions
             return result == null
                 ? Results.Ok(new { isSuccess = false, message = "Failed to retrieve the diff." })
                 : Results.Ok(new { isSuccess = true, data = result });
-        }).ExcludeFromDescription();
+        }).ExcludeFromDescription().AllowAnonymous();
 
         // Serve the Swagger Diff UI
         app.Map(options.RoutePrefix, swaggerDiffApp =>

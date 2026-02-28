@@ -168,12 +168,14 @@ swaggerdiff snapshot --assembly ./bin/Release/net8.0/MyApi.dll
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--project` | auto-discover | Path to a `.csproj` file. If omitted, finds the single `.csproj` in the current directory |
-| `--assembly` | — | Direct path to a built DLL. Overrides `--project` and skips the build step |
+| `--project` | auto-discover | Path to one or more `.csproj` files. Repeat for multiple projects |
+| `--assembly` | — | Direct path to a built DLL. Overrides `--project` and skips the build step (single project only) |
 | `-c`, `--configuration` | `Debug` | Build configuration (used with `--project`) |
 | `--no-build` | `false` | Skip the build step (assumes the project was already built) |
-| `--output` | `Docs/Versions` | Directory where snapshots are written |
+| `--output` | `Docs/Versions` | Directory where snapshots are written (relative to each project directory) |
 | `--doc-name` | `v1` | Swagger document name passed to `ISwaggerProvider.GetSwagger()` |
+| `--exclude` | — | Project names to exclude from auto-discovery (without `.csproj`). Repeat for multiple |
+| `--exclude-dir` | — | Directory names to exclude from auto-discovery. Repeat for multiple |
 
 The command will:
 
@@ -182,6 +184,35 @@ The command will:
 3. **Resolve `ISwaggerProvider`** from the DI container and serialize the OpenAPI document.
 4. **Compare** with the latest existing snapshot (normalizing away the `info.version` field).
 5. If the API surface has changed, **write a new timestamped file** (e.g. `doc_20250612143022.json`). If nothing changed, print "No API changes detected" and exit cleanly.
+
+### Multiple projects
+
+When run from a solution directory (or any directory without a single `.csproj`), the tool automatically discovers all ASP.NET Core web projects by scanning up to 2 levels deep for `.csproj` files with `Sdk="Microsoft.NET.Sdk.Web"`.
+
+```bash
+# From the solution root — discovers and snapshots all web API projects
+swaggerdiff snapshot
+
+# Explicit multi-project
+swaggerdiff snapshot \
+  --project ./src/AdminApi/AdminApi.csproj \
+  --project ./src/TenantApi/TenantApi.csproj
+
+# Auto-discover but skip specific projects or directories
+swaggerdiff snapshot --exclude MyApi.Tests --exclude-dir tests
+```
+
+Each project's snapshots are written to `Docs/Versions/` relative to that project's own directory:
+
+```
+src/
+  ServiceOneApi/
+    Docs/Versions/doc_20250612143022.json
+  ServiceTwoApi/
+    Docs/Versions/doc_20250612143022.json
+```
+
+The tool skips `bin/`, `obj/`, `.git/`, and other well-known non-project directories automatically.
 
 ### Dry-run mode — skipping external dependencies
 
