@@ -160,22 +160,29 @@ With explicit project and configuration:
 swaggerdiff snapshot --project ./src/MyApi/MyApi.csproj -c Release --output Docs/Versions
 ```
 
-Or point directly at a pre-built assembly:
+Or point directly at pre-built assemblies (skips build and project discovery entirely):
 
 ```bash
+# Single assembly
 swaggerdiff snapshot --assembly ./bin/Release/net8.0/MyApi.dll
+
+# Multiple assemblies
+swaggerdiff snapshot \
+  --assembly ./src/AdminApi/bin/Release/net9.0/AdminApi.dll \
+  --assembly ./src/TenantApi/bin/Release/net9.0/TenantApi.dll
 ```
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--project` | auto-discover | Path to one or more `.csproj` files. Repeat for multiple projects |
-| `--assembly` | — | Direct path to a built DLL. Overrides `--project` and skips the build step (single project only) |
+| `--assembly` | — | Direct path to built DLL(s). Overrides `--project` and skips build + project discovery. Repeat for multiple |
 | `-c`, `--configuration` | `Debug` | Build configuration (used with `--project`) |
 | `--no-build` | `false` | Skip the build step (assumes the project was already built) |
 | `--output` | `Docs/Versions` | Directory where snapshots are written (relative to each project directory) |
 | `--doc-name` | `v1` | Swagger document name passed to `ISwaggerProvider.GetSwagger()` |
 | `--exclude` | — | Project names to exclude from auto-discovery (without `.csproj`). Repeat for multiple |
 | `--exclude-dir` | — | Directory names to exclude from auto-discovery. Repeat for multiple |
+| `--parallelism` | `0` | Maximum concurrent snapshot subprocesses. `0` means unlimited (one per project) |
 
 The command will:
 
@@ -213,6 +220,27 @@ src/
 ```
 
 The tool skips `bin/`, `obj/`, `.git/`, and other well-known non-project directories automatically.
+
+### CI / Docker optimisation
+
+For CI pipelines or Docker builds where the solution is already built, you can combine `--assembly` with `--no-build` and `--parallelism` to skip all discovery and build overhead:
+
+```bash
+# Pre-build the solution once, then snapshot all APIs
+dotnet build MySolution.sln -c Release
+
+swaggerdiff snapshot --no-build -c Release \
+  --assembly ./src/AdminApi/bin/Release/net9.0/AdminApi.dll \
+  --assembly ./src/AuthApi/bin/Release/net9.0/AuthApi.dll \
+  --assembly ./src/TenantApi/bin/Release/net9.0/TenantApi.dll \
+  --parallelism 2
+```
+
+When `--assembly` is used, the tool skips project discovery and MSBuild property evaluation entirely — it goes straight to launching snapshot subprocesses. The output directory for each assembly is inferred by navigating up from `bin/{Config}/{TFM}/` to the project root.
+
+When `--no-build` is used with `--project` (instead of `--assembly`), MSBuild property resolution runs in parallel since it's read-only.
+
+Use `--parallelism` to cap concurrent subprocesses. The default (`0`) runs all concurrently. On resource-constrained environments like CI runners with 2 vCPUs, `--parallelism 2` avoids CPU oversubscription.
 
 ### Dry-run mode — skipping external dependencies
 

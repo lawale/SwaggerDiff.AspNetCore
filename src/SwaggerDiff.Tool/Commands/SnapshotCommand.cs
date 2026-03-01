@@ -11,7 +11,7 @@ namespace SwaggerDiff.Tool.Commands;
 /// optionally builds them, then re-invokes itself via <c>dotnet exec</c> with each target app's
 /// deps.json and runtimeconfig.json so that all assembly dependencies resolve correctly.
 /// </summary>
-internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
+internal sealed class SnapshotCommand : AsyncCommand<SnapshotCommand.Settings>
 {
     /// <summary>
     /// Well-known directories that are always skipped during auto-discovery.
@@ -28,8 +28,8 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         public string[]? Project { get; set; }
 
         [CommandOption("--assembly <PATH>")]
-        [Description("Direct path to a built assembly DLL. Overrides --project (skips build). Single project only.")]
-        public string? Assembly { get; set; }
+        [Description("Direct path to built assembly DLL(s). Skips build and project discovery. Repeat for multiple.")]
+        public string[]? Assembly { get; set; }
 
         [CommandOption("-c|--configuration <CONFIG>")]
         [Description("Build configuration.")]
@@ -59,39 +59,53 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         [Description("Directory names to exclude from auto-discovery. Repeat for multiple.")]
         public string[]? ExcludeDir { get; set; }
 
+        [CommandOption("--parallelism <N>")]
+        [Description("Maximum concurrent snapshot subprocesses. Defaults to number of projects.")]
+        [DefaultValue(0)]
+        public int Parallelism { get; set; }
+
         public override ValidationResult Validate()
         {
-            if (!string.IsNullOrWhiteSpace(Assembly))
+            if (Assembly is { Length: > 0 })
             {
-                var fullPath = Path.GetFullPath(Assembly);
-                if (!File.Exists(fullPath))
-                    return ValidationResult.Error($"Assembly not found: {fullPath}");
+                foreach (var assembly in Assembly)
+                {
+                    var fullPath = Path.GetFullPath(assembly);
+                    if (!File.Exists(fullPath))
+                        return ValidationResult.Error($"Assembly not found: {fullPath}");
+                }
             }
 
-            if (Project != null)
+            if (Project == null) return ValidationResult.Success();
+            
+            foreach (var project in Project)
             {
-                foreach (var project in Project)
-                {
-                    var fullPath = Path.GetFullPath(project);
-                    if (!File.Exists(fullPath))
-                        return ValidationResult.Error($"Project file not found: {fullPath}");
-                }
+                var fullPath = Path.GetFullPath(project);
+                if (!File.Exists(fullPath))
+                    return ValidationResult.Error($"Project file not found: {fullPath}");
             }
 
             return ValidationResult.Success();
         }
     }
 
-    public override int Execute(CommandContext context, Settings settings, CancellationToken cancellationToken)
+    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellationToken)
     {
-        // Single assembly mode — unchanged behavior
-        if (!string.IsNullOrWhiteSpace(settings.Assembly))
+        // Multi-assembly mode — skip discovery and build entirely
+        if (settings.Assembly is { Length: > 0 })
         {
-            AnsiConsole.MarkupLine($"[grey]Using assembly:[/] {settings.Assembly}");
-            var assemblyPath = Path.GetFullPath(settings.Assembly);
-            var assemblyDir = Path.GetDirectoryName(assemblyPath)!;
-            var outputDir = Path.GetFullPath(settings.Output);
-            return RunSnapshotSubprocess(assemblyPath, assemblyDir, outputDir, settings.DocName);
+            var assemblies = settings.Assembly.Select(a =>
+            {
+                var assemblyPath = Path.GetFullPath(a);
+                var assemblyDir = Path.GetDirectoryName(assemblyPath)!;
+                var projectDir = Path.GetFullPath(Path.Combine(assemblyDir, "..", "..", ".."));
+                var outputDir = Path.Combine(projectDir, settings.Output);
+                var name = Path.GetFileNameWithoutExtension(assemblyPath);
+                return (name, assemblyPath, assemblyDir, outputDir);
+            }).ToList();
+
+            AnsiConsole.MarkupLine($"[grey]Using {assemblies.Count} pre-built assembly(ies)[/]");
+            return await RunSnapshotsAsync(assemblies, settings, cancellationToken);
         }
 
         // Resolve one or more projects
@@ -99,40 +113,78 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         if (projects == null || projects.Count == 0)
             return 1;
 
-        // ── Phase 1: Build and resolve assemblies (sequential) ──
-        // Shared project dependencies (ApiBase, Core, Models, etc.) can cause file lock
-        // conflicts if multiple dotnet build invocations run concurrently.
-        var resolved = new List<(string name, string assemblyPath, string assemblyDir, string outputDir)>();
-        var buildFailures = 0;
+        // ── Phase 1: Build and resolve assemblies ──
+        // When --no-build is set, BuildAndResolveAssembly only evaluates MSBuild
+        // properties (read-only) — safe to parallelize. Builds are always sequential
+        // because shared project dependencies can cause file lock conflicts.
+        List<(string name, string assemblyPath, string assemblyDir, string outputDir)> resolved;
+        int buildFailures;
 
-        foreach (var projectPath in projects)
+        if (settings.NoBuild && projects.Count > 1)
         {
-            var projectName = Path.GetFileNameWithoutExtension(projectPath);
-            var projectDir = Path.GetDirectoryName(projectPath)!;
-
-            if (projects.Count > 1)
-                AnsiConsole.MarkupLine($"\n[bold]── {projectName.EscapeMarkup()} ──[/]");
-
-            var assemblyPath = BuildAndResolveAssembly(projectPath, settings);
-            if (assemblyPath == null)
+            AnsiConsole.MarkupLine($"[grey]Resolving {projects.Count} assemblies in parallel (--no-build)...[/]");
+            var resolvedArray = new (string projectPath, string? assemblyPath)[projects.Count];
+            Parallel.For(0, projects.Count, i =>
             {
-                buildFailures++;
-                continue;
-            }
+                resolvedArray[i] = (projects[i], BuildAndResolveAssembly(projects[i], settings, silent: true));
+            });
 
-            resolved.Add((projectName, assemblyPath, Path.GetDirectoryName(assemblyPath)!, Path.Combine(projectDir, settings.Output)));
+            resolved = [];
+            buildFailures = 0;
+            foreach (var (projectPath, assemblyPath) in resolvedArray)
+            {
+                if (assemblyPath == null)
+                {
+                    buildFailures++;
+                    continue;
+                }
+
+                var projectName = Path.GetFileNameWithoutExtension(projectPath);
+                var projectDir = Path.GetDirectoryName(projectPath)!;
+                resolved.Add((projectName, assemblyPath, Path.GetDirectoryName(assemblyPath)!, Path.Combine(projectDir, settings.Output)));
+            }
+        }
+        else
+        {
+            resolved = [];
+            buildFailures = 0;
+
+            foreach (var projectPath in projects)
+            {
+                var projectName = Path.GetFileNameWithoutExtension(projectPath);
+                var projectDir = Path.GetDirectoryName(projectPath)!;
+
+                if (projects.Count > 1)
+                    AnsiConsole.MarkupLine($"\n[bold]── {projectName.EscapeMarkup()} ──[/]");
+
+                var assemblyPath = BuildAndResolveAssembly(projectPath, settings);
+                if (assemblyPath == null)
+                {
+                    buildFailures++;
+                    continue;
+                }
+
+                resolved.Add((projectName, assemblyPath, Path.GetDirectoryName(assemblyPath)!, Path.Combine(projectDir, settings.Output)));
+            }
         }
 
         if (resolved.Count == 0)
             return 1;
 
-        // ── Phase 2: Generate snapshots ──
+        return await RunSnapshotsAsync(resolved, settings, cancellationToken, buildFailures);
+    }
+
+    private async Task<int> RunSnapshotsAsync(
+        List<(string name, string assemblyPath, string assemblyDir, string outputDir)> resolved,
+        Settings settings,
+        CancellationToken cancellationToken,
+        int priorFailures = 0)
+    {
         var succeeded = 0;
-        var failed = buildFailures;
+        var failed = priorFailures;
 
         if (resolved.Count == 1)
         {
-            // Single project — run directly (no buffering overhead)
             var p = resolved[0];
             var exitCode = RunSnapshotSubprocess(p.assemblyPath, p.assemblyDir, p.outputDir, settings.DocName);
             if (exitCode == 0) succeeded++;
@@ -140,15 +192,15 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         }
         else
         {
-            // Multiple projects — run subprocesses concurrently.
-            // Each subprocess is a fully independent OS process (own deps.json, runtimeconfig,
-            // working directory) so there are no shared resources or ordering constraints.
             var sw = Stopwatch.StartNew();
-            AnsiConsole.MarkupLine($"\n[grey]Generating {resolved.Count} snapshots concurrently...[/]");
+            var maxParallelism = settings.Parallelism > 0 ? settings.Parallelism : resolved.Count;
+            AnsiConsole.MarkupLine($"\n[grey]Generating {resolved.Count} snapshots concurrently (parallelism={maxParallelism})...[/]");
 
+            var semaphore = new SemaphoreSlim(maxParallelism);
             var results = new SnapshotResult[resolved.Count];
-            var tasks = resolved.Select((p, i) => Task.Run(() =>
+            var tasks = resolved.Select((p, i) => Task.Run(async () =>
             {
+                await semaphore.WaitAsync(cancellationToken);
                 try
                 {
                     results[i] = RunSnapshotSubprocessBuffered(p.assemblyPath, p.assemblyDir, p.outputDir, settings.DocName);
@@ -157,12 +209,15 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
                 {
                     results[i] = new SnapshotResult(1, "", $"Error: {ex.Message}\n");
                 }
+                finally
+                {
+                    semaphore.Release();
+                }
             }, cancellationToken)).ToArray();
 
-            Task.WhenAll(tasks).GetAwaiter().GetResult();
+            await Task.WhenAll(tasks);
             sw.Stop();
 
-            // Print buffered output in project order
             for (var i = 0; i < resolved.Count; i++)
             {
                 var p = resolved[i];
@@ -173,7 +228,7 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
                 if (!string.IsNullOrWhiteSpace(result.Stdout))
                     Console.Write(result.Stdout);
                 if (!string.IsNullOrWhiteSpace(result.Stderr))
-                    Console.Error.Write(result.Stderr);
+                    await Console.Error.WriteAsync(result.Stderr);
 
                 if (result.ExitCode == 0) succeeded++;
                 else failed++;
@@ -182,10 +237,9 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
             AnsiConsole.MarkupLine($"\n[grey]Completed in {sw.Elapsed.TotalSeconds:F1}s[/]");
         }
 
-        // Print summary for multi-project runs
-        if (projects.Count > 1)
+        var total = succeeded + failed;
+        if (total > 1)
         {
-            var total = succeeded + failed;
             if (failed == 0)
                 AnsiConsole.MarkupLine($"[green]Snapshots complete:[/] {succeeded}/{total} succeeded");
             else
@@ -194,7 +248,11 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
 
         return failed > 0 ? 1 : 0;
     }
-    
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Project resolution
+    // ─────────────────────────────────────────────────────────────────
+
     /// <summary>
     /// Resolves the list of projects to process from explicit flags or auto-discovery.
     /// </summary>
@@ -313,21 +371,30 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────
+    //  Build and resolve
+    // ─────────────────────────────────────────────────────────────────
+
     /// <summary>
     /// Builds a project (unless --no-build) and resolves its output assembly DLL path.
+    /// When <paramref name="silent"/> is true, suppresses console output (used during parallel resolution).
     /// </summary>
-    private static string? BuildAndResolveAssembly(string projectPath, Settings settings)
+    private static string? BuildAndResolveAssembly(string projectPath, Settings settings, bool silent = false)
     {
-        AnsiConsole.MarkupLine($"[grey]Using project:[/] {projectPath}");
+        if (!silent)
+            AnsiConsole.MarkupLine($"[grey]Using project:[/] {projectPath}");
 
         if (!settings.NoBuild)
         {
-            AnsiConsole.MarkupLine($"[grey]Building[/] ({settings.Configuration})...");
+            if (!silent)
+                AnsiConsole.MarkupLine($"[grey]Building[/] ({settings.Configuration})...");
             var buildResult = RunProcess("dotnet",
-                $"build {EscapePath(projectPath)} --configuration {settings.Configuration} --nologo -v q");
+                $"build {EscapePath(projectPath)} --configuration {settings.Configuration} --nologo -v q",
+                silent);
             if (buildResult != 0)
             {
-                AnsiConsole.MarkupLine("[red]Error:[/] Build failed.");
+                if (!silent)
+                    AnsiConsole.MarkupLine("[red]Error:[/] Build failed.");
                 return null;
             }
         }
@@ -335,7 +402,8 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         var targetPath = GetMsBuildProperty(projectPath, "TargetPath", settings.Configuration);
         if (string.IsNullOrWhiteSpace(targetPath) || !File.Exists(targetPath))
         {
-            AnsiConsole.MarkupLine("[red]Error:[/] Could not resolve assembly path from project. Try using --assembly directly.");
+            if (!silent)
+                AnsiConsole.MarkupLine("[red]Error:[/] Could not resolve assembly path from project. Try using --assembly directly.");
             return null;
         }
 
@@ -455,7 +523,7 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         return process.ExitCode == 0 ? output : null;
     }
 
-    private static int RunProcess(string fileName, string arguments)
+    private static int RunProcess(string fileName, string arguments, bool silent = false)
     {
         var process = new Process
         {
@@ -476,10 +544,13 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
 
         process.WaitForExit();
 
-        if (!string.IsNullOrWhiteSpace(stdout))
-            Console.Write(stdout);
-        if (!string.IsNullOrWhiteSpace(stderr))
-            Console.Error.Write(stderr);
+        if (!silent)
+        {
+            if (!string.IsNullOrWhiteSpace(stdout))
+                Console.Write(stdout);
+            if (!string.IsNullOrWhiteSpace(stderr))
+                Console.Error.Write(stderr);
+        }
 
         return process.ExitCode;
     }
