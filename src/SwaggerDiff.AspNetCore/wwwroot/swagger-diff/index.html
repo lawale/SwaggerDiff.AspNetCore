@@ -199,7 +199,7 @@
 <body>
     <div class="container">
         <div class="header-row">
-            <a href="{{PATH_BASE}}/swagger" class="back-link">&#128281; Back to Swagger</a>
+            <a id="backLink" href="/swagger" class="back-link">&#128281; Back to Swagger</a>
             <h2 class="title">Swagger Diff Viewer</h2>
         </div>
 
@@ -241,8 +241,11 @@
     <div id="toast" class="toast"></div>
 
     <script>
-        // PathBase injected at serve-time (empty string when no reverse proxy prefix)
-        const pathBase = '{{PATH_BASE}}';
+        // Derive PathBase from the current URL at runtime.
+        // This page is served at {pathBase}/swagger-diff, so everything
+        // before the last segment is the application's PathBase.
+        const pagePath = window.location.pathname.replace(/\/+$/, '');
+        const pathBase = pagePath.substring(0, pagePath.lastIndexOf('/'));
 
         // State
         let versions = [];
@@ -416,6 +419,9 @@
 
         // Parse URL params and initialize
         function init() {
+            // Update back link with PathBase
+            document.getElementById('backLink').href = pathBase + '/swagger';
+
             const params = new URLSearchParams(window.location.search);
             const oldParam = params.get('old');
             const newParam = params.get('new');

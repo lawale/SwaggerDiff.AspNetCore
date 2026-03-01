@@ -74,22 +74,8 @@ public static class SwaggerDiffExtensions
                     await using var stream = Assembly.GetManifestResourceStream(SwaggerDiffIndexResource);
                     if (stream != null)
                     {
-                        // Inside a Map() branch, PathBase includes the RoutePrefix.
-                        // Strip it to recover the application's actual PathBase so the
-                        // frontend can prefix API calls correctly.
-                        var branchPathBase = context.Request.PathBase.Value?.TrimEnd('/') ?? "";
-                        var normalizedPrefix = options.RoutePrefix.TrimEnd('/');
-                        var pathBase = branchPathBase.EndsWith(normalizedPrefix, StringComparison.OrdinalIgnoreCase)
-                            ? branchPathBase[..^normalizedPrefix.Length]
-                            : branchPathBase;
-                        pathBase = pathBase.TrimEnd('/');
-
-                        using var reader = new StreamReader(stream);
-                        var html = (await reader.ReadToEndAsync())
-                            .Replace("{{PATH_BASE}}", pathBase);
-
                         context.Response.ContentType = "text/html";
-                        await context.Response.WriteAsync(html);
+                        await stream.CopyToAsync(context.Response.Body);
                         return;
                     }
                 }
