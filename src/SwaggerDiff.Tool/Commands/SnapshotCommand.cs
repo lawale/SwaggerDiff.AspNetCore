@@ -314,11 +314,12 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
             return 1;
         }
 
-        // Resolve tool paths for --additional-deps and --additionalprobingpath
+        // Resolve tool paths for subprocess invocation.
+        // We intentionally do NOT use --additional-deps because it causes eager resolution
+        // of all tool dependencies (Spectre.Console, etc.) which fails when they aren't in
+        // the target app's probing paths. Instead, Program.cs registers an AssemblyLoadContext
+        // resolver that lazily loads tool dependencies from the tool's own directory.
         var toolDll = typeof(SnapshotCommand).Assembly.Location;
-        var toolDir = Path.GetDirectoryName(toolDll)!;
-        var toolDepsFile = Path.Combine(toolDir,
-            Path.GetFileNameWithoutExtension(toolDll) + ".deps.json");
 
         var nugetPackages = Environment.GetEnvironmentVariable("NUGET_PACKAGES")
             ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".nuget", "packages");
@@ -327,23 +328,14 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         {
             "exec",
             "--depsfile", EscapePath(depsFile),
-            "--runtimeconfig", EscapePath(runtimeConfig)
-        };
-
-        if (File.Exists(toolDepsFile))
-            args.AddRange(["--additional-deps", EscapePath(toolDepsFile)]);
-
-        args.AddRange(["--additionalprobingpath", EscapePath(nugetPackages)]);
-        args.AddRange(["--additionalprobingpath", EscapePath(toolDir)]);
-
-        args.AddRange(
-        [
+            "--runtimeconfig", EscapePath(runtimeConfig),
+            "--additionalprobingpath", EscapePath(nugetPackages),
             EscapePath(toolDll),
             "_snapshot",
             "--assembly", EscapePath(assemblyPath),
             "--output", EscapePath(Path.GetFullPath(outputDir)),
             "--doc-name", docName
-        ]);
+        };
 
         var processArgs = string.Join(" ", args);
 
