@@ -99,8 +99,11 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
         if (projects == null || projects.Count == 0)
             return 1;
 
-        var succeeded = 0;
-        var failed = 0;
+        // ── Phase 1: Build and resolve assemblies (sequential) ──
+        // Shared project dependencies (ApiBase, Core, Models, etc.) can cause file lock
+        // conflicts if multiple dotnet build invocations run concurrently.
+        var resolved = new List<(string name, string assemblyPath, string assemblyDir, string outputDir)>();
+        var buildFailures = 0;
 
         foreach (var projectPath in projects)
         {
@@ -110,33 +113,83 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
             if (projects.Count > 1)
                 AnsiConsole.MarkupLine($"\n[bold]── {projectName.EscapeMarkup()} ──[/]");
 
-            // Build and resolve the assembly DLL
             var assemblyPath = BuildAndResolveAssembly(projectPath, settings);
             if (assemblyPath == null)
             {
-                failed++;
+                buildFailures++;
                 continue;
             }
 
-            // Output directory is relative to the project's directory
-            var outputDir = Path.Combine(projectDir, settings.Output);
-            var assemblyDir = Path.GetDirectoryName(assemblyPath)!;
+            resolved.Add((projectName, assemblyPath, Path.GetDirectoryName(assemblyPath)!, Path.Combine(projectDir, settings.Output)));
+        }
 
-            var exitCode = RunSnapshotSubprocess(assemblyPath, assemblyDir, outputDir, settings.DocName);
-            if (exitCode == 0)
-                succeeded++;
-            else
-                failed++;
+        if (resolved.Count == 0)
+            return 1;
+
+        // ── Phase 2: Generate snapshots ──
+        var succeeded = 0;
+        var failed = buildFailures;
+
+        if (resolved.Count == 1)
+        {
+            // Single project — run directly (no buffering overhead)
+            var p = resolved[0];
+            var exitCode = RunSnapshotSubprocess(p.assemblyPath, p.assemblyDir, p.outputDir, settings.DocName);
+            if (exitCode == 0) succeeded++;
+            else failed++;
+        }
+        else
+        {
+            // Multiple projects — run subprocesses concurrently.
+            // Each subprocess is a fully independent OS process (own deps.json, runtimeconfig,
+            // working directory) so there are no shared resources or ordering constraints.
+            var sw = Stopwatch.StartNew();
+            AnsiConsole.MarkupLine($"\n[grey]Generating {resolved.Count} snapshots concurrently...[/]");
+
+            var results = new SnapshotResult[resolved.Count];
+            var tasks = resolved.Select((p, i) => Task.Run(() =>
+            {
+                try
+                {
+                    results[i] = RunSnapshotSubprocessBuffered(p.assemblyPath, p.assemblyDir, p.outputDir, settings.DocName);
+                }
+                catch (Exception ex)
+                {
+                    results[i] = new SnapshotResult(1, "", $"Error: {ex.Message}\n");
+                }
+            }, cancellationToken)).ToArray();
+
+            Task.WhenAll(tasks).GetAwaiter().GetResult();
+            sw.Stop();
+
+            // Print buffered output in project order
+            for (var i = 0; i < resolved.Count; i++)
+            {
+                var p = resolved[i];
+                var result = results[i];
+
+                AnsiConsole.MarkupLine($"\n[bold]── {p.name.EscapeMarkup()} ──[/]");
+
+                if (!string.IsNullOrWhiteSpace(result.Stdout))
+                    Console.Write(result.Stdout);
+                if (!string.IsNullOrWhiteSpace(result.Stderr))
+                    Console.Error.Write(result.Stderr);
+
+                if (result.ExitCode == 0) succeeded++;
+                else failed++;
+            }
+
+            AnsiConsole.MarkupLine($"\n[grey]Completed in {sw.Elapsed.TotalSeconds:F1}s[/]");
         }
 
         // Print summary for multi-project runs
         if (projects.Count > 1)
         {
-            AnsiConsole.WriteLine();
+            var total = succeeded + failed;
             if (failed == 0)
-                AnsiConsole.MarkupLine($"[green]Snapshots complete:[/] {succeeded}/{projects.Count} succeeded");
+                AnsiConsole.MarkupLine($"[green]Snapshots complete:[/] {succeeded}/{total} succeeded");
             else
-                AnsiConsole.MarkupLine($"[yellow]Snapshots complete:[/] {succeeded}/{projects.Count} succeeded, {failed} failed");
+                AnsiConsole.MarkupLine($"[yellow]Snapshots complete:[/] {succeeded}/{total} succeeded, {failed} failed");
         }
 
         return failed > 0 ? 1 : 0;
@@ -293,26 +346,23 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
     //  Subprocess execution (Stage 2)
     // ─────────────────────────────────────────────────────────────────
 
+    private sealed record SnapshotResult(int ExitCode, string Stdout, string Stderr);
+
     /// <summary>
     /// Launches the Stage 2 subprocess via <c>dotnet exec</c> with the target app's dependency context.
+    /// Returns buffered output without writing to the console.
     /// </summary>
-    private static int RunSnapshotSubprocess(string assemblyPath, string assemblyDir, string outputDir, string docName)
+    private static SnapshotResult RunSnapshotSubprocessBuffered(string assemblyPath, string assemblyDir, string outputDir, string docName)
     {
         var assemblyName = Path.GetFileNameWithoutExtension(assemblyPath);
         var depsFile = Path.Combine(assemblyDir, $"{assemblyName}.deps.json");
         var runtimeConfig = Path.Combine(assemblyDir, $"{assemblyName}.runtimeconfig.json");
 
         if (!File.Exists(depsFile))
-        {
-            AnsiConsole.MarkupLine($"[red]Error:[/] deps.json not found: {depsFile.EscapeMarkup()}");
-            return 1;
-        }
+            return new SnapshotResult(1, "", $"Error: deps.json not found: {depsFile}\n");
 
         if (!File.Exists(runtimeConfig))
-        {
-            AnsiConsole.MarkupLine($"[red]Error:[/] runtimeconfig.json not found: {runtimeConfig.EscapeMarkup()}");
-            return 1;
-        }
+            return new SnapshotResult(1, "", $"Error: runtimeconfig.json not found: {runtimeConfig}\n");
 
         // Resolve tool paths for subprocess invocation.
         // We intentionally do NOT use --additional-deps because it causes eager resolution
@@ -337,14 +387,12 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
             "--doc-name", docName
         };
 
-        var processArgs = string.Join(" ", args);
-
         var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
                 FileName = "dotnet",
-                Arguments = processArgs,
+                Arguments = string.Join(" ", args),
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -362,12 +410,23 @@ internal sealed class SnapshotCommand : Command<SnapshotCommand.Settings>
 
         process.WaitForExit();
 
-        if (!string.IsNullOrWhiteSpace(stdout))
-            Console.Write(stdout);
-        if (!string.IsNullOrWhiteSpace(stderr))
-            Console.Error.Write(stderr);
+        return new SnapshotResult(process.ExitCode, stdout, stderr);
+    }
 
-        return process.ExitCode;
+    /// <summary>
+    /// Launches the Stage 2 subprocess and writes output directly to the console.
+    /// Used for single-project runs where buffering isn't needed.
+    /// </summary>
+    private static int RunSnapshotSubprocess(string assemblyPath, string assemblyDir, string outputDir, string docName)
+    {
+        var result = RunSnapshotSubprocessBuffered(assemblyPath, assemblyDir, outputDir, docName);
+
+        if (!string.IsNullOrWhiteSpace(result.Stdout))
+            Console.Write(result.Stdout);
+        if (!string.IsNullOrWhiteSpace(result.Stderr))
+            Console.Error.Write(result.Stderr);
+
+        return result.ExitCode;
     }
 
     // ─────────────────────────────────────────────────────────────────
