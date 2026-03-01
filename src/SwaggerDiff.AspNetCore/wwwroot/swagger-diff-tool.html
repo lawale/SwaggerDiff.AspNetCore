@@ -26,8 +26,13 @@
             const target = document.querySelector('.topbar .download-url-wrapper');
 
             if (target && !document.getElementById('swagger-diff-btn')) {
+                // Derive PathBase from the current URL.
+                // SwaggerUI lives at {pathBase}/swagger, so strip the swagger
+                // segment to get the application's PathBase prefix.
+                const swaggerBase = window.location.pathname.replace(/\/swagger\b.*$/, '');
+
                 const btn = document.createElement('a');
-                btn.href = '/swagger-diff';
+                btn.href = swaggerBase + '/swagger-diff';
                 btn.innerHTML = `<svg xmlns='http://www.w3.org/2000/svg' height='16' viewBox='0 0 24 24' width='16' fill='white'><path d='M0 0h24v24H0V0z' fill='none'/><path d='M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l4.25 4.25c.41.41 1.08.41 1.49 0s.41-1.08 0-1.49L15.5 14zM5 9.5C5 7.01 7.01 5 9.5 5S14 7.01 14 9.5 11.99 14 9.5 14 5 11.99 5 9.5z'/></svg>Swagger Diff Tool`;
                 btn.className = 'swagger-diff-btn';
                 btn.id = 'swagger-diff-btn';

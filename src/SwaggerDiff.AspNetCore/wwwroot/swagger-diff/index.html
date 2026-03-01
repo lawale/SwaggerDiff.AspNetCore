@@ -199,7 +199,7 @@
 <body>
     <div class="container">
         <div class="header-row">
-            <a href="/swagger" class="back-link">&#128281; Back to Swagger</a>
+            <a href="{{PATH_BASE}}/swagger" class="back-link">&#128281; Back to Swagger</a>
             <h2 class="title">Swagger Diff Viewer</h2>
         </div>
 
@@ -241,6 +241,9 @@
     <div id="toast" class="toast"></div>
 
     <script>
+        // PathBase injected at serve-time (empty string when no reverse proxy prefix)
+        const pathBase = '{{PATH_BASE}}';
+
         // State
         let versions = [];
         let oldVersionName = '';
@@ -268,7 +271,7 @@
 
         // Copy shareable link
         function copyLink() {
-            const url = `${window.location.origin}/swagger-diff?old=${oldVersionName}&new=${newVersionName}&mode=${mode}`;
+            const url = `${window.location.origin}${window.location.pathname}?old=${oldVersionName}&new=${newVersionName}&mode=${mode}`;
             navigator.clipboard.writeText(url)
                 .then(() => showToast('Link copied to clipboard!'));
         }
@@ -334,7 +337,7 @@
         // Fetch versions from API
         async function fetchVersions() {
             try {
-                const res = await fetch('/api-docs/versions');
+                const res = await fetch(pathBase + '/api-docs/versions');
                 const json = await res.json();
                 if (!json.isSuccess) throw new Error(json.message || 'Unable to load versions');
                 versions = json.data;
@@ -355,7 +358,7 @@
             diffContainer.style.display = 'none';
 
             try {
-                const res = await fetch('/api-docs/compare', {
+                const res = await fetch(pathBase + '/api-docs/compare', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
