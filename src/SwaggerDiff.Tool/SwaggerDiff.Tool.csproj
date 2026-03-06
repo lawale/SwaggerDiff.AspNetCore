@@ -16,8 +16,8 @@
         <Authors>OluwaVader</Authors>
         <Description>CLI tool for generating OpenAPI snapshots from built assemblies without running the web server. Like dotnet-ef for your API surface.</Description>
         <PackageTags>swagger;openapi;diff;cli;dotnet-tool;snapshot</PackageTags>
-        <PackageProjectUrl>https://github.com/OluwaVader/SwaggerDiff.AspNetCore</PackageProjectUrl>
-        <RepositoryUrl>https://github.com/OluwaVader/SwaggerDiff.AspNetCore</RepositoryUrl>
+        <PackageProjectUrl>https://github.com/lawale/SwaggerDiff.AspNetCore</PackageProjectUrl>
+        <RepositoryUrl>https://github.com/lawale/SwaggerDiff.AspNetCore</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageReadmeFile>README.md</PackageReadmeFile>
