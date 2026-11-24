@@ -80,6 +80,7 @@ internal static class HostResolver
         // app.Run() will block that thread, but since it's a background thread it won't
         // prevent this process from exiting.
         Exception? entryPointException = null;
+        var entryPointExited = new ManualResetEventSlim(false);
         var thread = new Thread(() =>
         {
             try
@@ -104,6 +105,10 @@ internal static class HostResolver
             {
                 entryPointException = ex;
                 hostBuiltSignal.Set();
+            }
+            finally
+            {
+                entryPointExited.Set();
             }
         }) { IsBackground = true };
         thread.Start();
@@ -136,12 +141,16 @@ internal static class HostResolver
             using var reg = lifetime.ApplicationStarted.Register(() => started.Set());
 
             if (!started.IsSet)
-                started.Wait(TimeSpan.FromSeconds(30));
+                WaitHandle.WaitAny([started.WaitHandle, entryPointExited.WaitHandle], TimeSpan.FromSeconds(30));
         }
         catch
         {
             // If we can't wait for startup, the DI container should still be usable
         }
+
+        if (entryPointException != null)
+            AnsiConsole.MarkupLine(
+                $"[yellow]Warning:[/] Application startup failed after the host was built; generating the snapshot from the built host. {entryPointException.GetType().Name}: {entryPointException.Message.EscapeMarkup()}");
 
         return capturedHost.Services;
     }
